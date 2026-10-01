@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Super Mario Flappy Bird Playtest</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            user-select: none;
+        }
+        body {
+            margin: 0;
+            background: #111;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+            color: #fff;
+        }
+        .game-container {
+            display: flex;
+            gap: 20px;
+            background: #222;
+            padding: 15px;
+            border-radius: 16px;
+            border: 4px solid #f8b800;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.6);
+        }
+        canvas {
+            border-radius: 4px;
+            background: #5c94fc;
+            border: 4px solid #000;
+        }
+        .sidebar {
+            width: 220px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            background: #333;
+            padding: 15px;
+            border-radius: 8px;
+            border: 3px solid #000;
+        }
+        .panel-section h3 {
+            margin: 0 0 12px 0;
+            font-size: 14px;
+            text-transform: uppercase;
+            color: #f8b800;
+            border-bottom: 2px solid #fff;
+            padding-bottom: 4px;
+        }
+        .btn {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 10px;
+            border: 3px solid #000;
+            border-radius: 0px;
+            background: #fc9c5c;
+            color: #000;
+            font-weight: bold;
+            font-size: 12px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .btn:hover {
+            background: #f8b800;
+        }.btn.active {
+            background: #a80000;
+            color: #fff;
+        }
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            background: #000;
+            border: 1px solid #fff;
+        }
+        .btn.active .status-indicator {
+            background: #00ff00;
+        }
+        .instructions {
+            font-size: 12px;
+            color: #fff;
+            line-height: 1.4;
+        }
+    </style>
+</head>
+<body>
+
+<div class="game-container">
+    <canvas id="gameCanvas" width="400" height="600"></canvas>
+    
+    <div class="sidebar">
+        <div class="panel-section">
+            <h3>Playtest HUD</h3>
+            <button class="btn" id="godBtn" onclick="toggleGodMode()">
+                <span>GOD MODE [G]</span>
+                <div class="status-indicator"></div>
+            </button>
+            <button class="btn" id="hitboxBtn" onclick="toggleHitboxes()">
+                <span>HITBOXES [H]</span>
+                <div class="status-indicator"></div>
+            </button>
+            <button class="btn" onclick="resetGame()">
+                <span>RESET MAP [R]</span>
+            </button>
+        </div>
+        
+        <div class="panel-section">
+            <h3>Controls</h3>
+            <p class="instructions">
+                Press JUMP (Space/Click) to bounce the Cheep-Cheep bird through Bowser's Warp Pipes!
+            </p>
+        </div>
+    </div>
+</div>
+
+<script>
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+let gameStarted = false;
+let gameOver = false;
+let score = 0;
+let highscore = localStorage.getItem("mario_highscore") ? parseInt(localStorage.getItem("mario_highscore")) : 0;
+
+// Balance settings
+const HORIZONTAL_PIPE_SPACING = 250; 
+const VERTICAL_PIPE_GAP = 145;       
+let godMode = false;                 
+let showHitboxes = false;            
+
+let screenShakeTime = 0;
+let screenShakeIntensity = 0;
+const particles = [];
+
+// Decorative Hills Setup
+const landscapeItems = [];
+function spawnLandscapeItem(xPos) {
+    landscapeItems.push({
+        x: xPos,
+        y: 480, 
+        type: Math.random() > 0.5 ? 'hill' : 'bush',
+        width: Math.random() * 60 + 60,
+        height: Math.random() * 40 + 30,
+        speed: 0.5
+    });
+}
+for(let i=0; i<5; i++) { spawnLandscapeItem(i * 110); }
+
+// Native Audio Synthesizer (No sound files needed)
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+function playMarioSound(type) {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    
+    const osc = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+    osc.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    const now = audioCtx.currentTime;
+
+    if (type === 'flap') {
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(150, now);
+        osc.frequency.exponentialRampToValueAtTime(600, now + 0.15);
+        gainNode.gain.setValueAtTime(0.25, now);
+        gainNode.gain.linearRampToValueAtTime(0.01, now + 0.15);
+        osc.start(now);
+        osc.stop(now + 0.15);
+    } else if (type === 'score') {
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(987.77, now); 
+        osc.frequency.setValueAtTime(1318.51, now + 0.08); 
+        gainNode.gain.setValueAtTime(0.18, now);
+        gainNode.gain.linearRampToValueAtTime(0.01, now + 0.3);
+        osc.start(now);
+        osc.stop(now + 0.3);
+    } else if (type === 'hit') {
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(300, now);
+        osc.frequency.linearRampToValueAtTime(60, now + 0.3);
+        gainNode.gain.setValueAtTime(0.3, now);
+        gainNode.gain.linearRampToValueAtTime(0.01, now + 0.3);
+        osc.start(now);
+        osc.stop(now + 0.3);
+    }
+}
+
+function triggerShake(duration, intensity) {
+    screenShakeTime = duration;
+    screenShakeIntensity = intensity;
+}
+
+const bird = {
+    x: 80,
+    y: 280,
+    radius: 14,
+    gravity: 0.4,
+    velocity: 0,
+    jump: -6.8,
+    draw: function() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+
+        let angle = this.velocity * 0.06;
+        if (angle > 0.6) angle = 0.6;
+        if (angle < -0.3) angle = -0.3;
+        ctx.rotate(angle);
+
+        // Character Main Body
+        ctx.beginPath();
+        ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+        ctx.fillStyle = godMode ? "#f8b800" : "#e40010"; 
+        ctx.fill();
+        ctx.strokeStyle = "#000";
+        ctx.lineWidth = 3;
+        ctx.stroke();
+
+        // Round Eye Style
+        ctx.beginPath();
+        ctx.arc(6, -4, 5, 0, Math.PI * 2);
+        ctx.fillStyle = "#fff";
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(7, -4, 2, 0, Math.PI * 2);
+        ctx.fillStyle = "#000";
+        ctx.fill();
+
+        // Mouth/Beak
+        ctx.beginPath();
+        ctx.arc(12, 3, 5, 0, Math.PI * 2);
+        ctx.fillStyle = "#f8b800";
+        ctx.fill();
+        ctx.stroke();
+
+        // Animated Wing Structure
+        ctx.save();
+        ctx.translate(-6, 0);
+        ctx.rotate(Math.sin(Date.now() * 0.015) * 0.5);
+        ctx.beginPath();
+        ctx.ellipse(0, 0, 10, 6, 0, 0, Math.PI*2);
+        ctx.fillStyle = "#fff";
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+
+        ctx.restore();
+
+        if (showHitboxes) {
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.strokeStyle = "#fff";
+            ctx.stroke();
+        }
+    }
+};
+
+const pipes = [];
+const pipeWidth = 70;
+const pipeSpeed = 2.0;
+
+function spawnPipe() {
+    const minH = 80;
+    const maxH = 480 - VERTICAL_PIPE_GAP - minH;
+    const topHeight = Math.floor(Math.random() * (maxH - minH + 1)) + minH;
+    pipes.push({ x: canvas.width, top: topHeight, passed: false });
+}
+
+function resetGame() {
+    score = 0; bird.y = 280; bird.velocity = 0;
+    pipes.length = 0; particles.length = 0;
+    gameStarted = false; gameOver = false;
+}
+
+function handleJump() {
+    if (gameOver) { resetGame(); return; }
+    if (!gameStarted) gameStarted = true;
+    bird.velocity = bird.jump;
+    playMarioSound('flap');
+
+    for(let i = 0; i < 4; i++) {
+        particles.push({
+            x: bird.x - 10, y: bird.y,
+            vx: -Math.random() * 2 - 1, vy: (Math.random() - 0.5) * 4,
+            w: Math.random() * 4 + 3, h: Math.random() * 4 + 3,
+            alpha: 1
+        });
+    }
+}
+
+window.addEventListener("keydown", (e) => {
+    if (e.code === "Space") handleJump();
+    if (e.code === "KeyR") resetGame();
+    if (e.code === "KeyG") toggleGodMode();
+    if (e.code === "KeyH") toggleHitboxes();
+});
+canvas.addEventListener("mousedown", handleJump);
+
+function toggleGodMode() {
+    godMode = !godMode;
+    document.getElementById("godBtn").classList.toggle("active", godMode);
+}
+function toggleHitboxes() {
+    showHitboxes = !showHitboxes;
+    document.getElementById("hitboxBtn").classList.toggle("active", showHitboxes);
+}
+
+function drawMarioWarpPipe(x, y, width, height, isTop) {
+    ctx.fillStyle = "#00a800"; 
+    ctx.fillRect(x, y, width, height);
+
+    ctx.fillStyle = "#48f848";
+    ctx.fillRect(x, y, 10, height);
+    ctx.fillStyle = "#007800"; 
+    ctx.fillRect(x + width - 12, y, 12, height);
+
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(x, y, width, height);
+
+    const capH = 26;
+    const capExt = 5;
+    const lipX = x - capExt;
+    const lipW = width + (capExt * 2);
+    let lipY = isTop ? (y + height - capH) : y;
+
+    ctx.fillStyle = "#00a800";
+    ctx.fillRect(lipX, lipY, lipW, capH);
+    ctx.fillStyle = "#48f848";
+    ctx.fillRect(lipX, lipY, 10, capH);
+    ctx.fillStyle = "#007800";
+    ctx.fillRect(lipX + lipW - 12, lipY, 12, capH);
+    ctx.strokeRect(lipX, lipY, lipW, capH);
+
+    if (showHitboxes) {
+        ctx.strokeStyle = "red";
+        ctx.strokeRect(x, y, width, height);
+    }
+}
+
+function engineLoop() {
